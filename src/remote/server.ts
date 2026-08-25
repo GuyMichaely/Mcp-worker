@@ -14,10 +14,12 @@ const relay = new RelayService(store, config.WORKER_ID, config.WORKER_OFFLINE_AF
 const mcp = createMachineMcpHandler(relay);
 const nodeMcp = toNodeHandler(mcp);
 
-const app = createMcpExpressApp({
-  host: config.BIND_HOST,
-  allowedHosts: config.BIND_HOST === "127.0.0.1" ? undefined : [new URL(config.PUBLIC_BASE_URL).hostname]
-});
+const app = config.BIND_HOST === "127.0.0.1"
+  ? createMcpExpressApp({ host: config.BIND_HOST })
+  : createMcpExpressApp({
+      host: config.BIND_HOST,
+      allowedHosts: [new URL(config.PUBLIC_BASE_URL).hostname]
+    });
 
 app.get("/healthz", (_req, res) => {
   res.json({ status: "healthy", protocolVersion: "worker.v1" });
@@ -74,7 +76,7 @@ app.post("/worker/v1/jobs/:id/result", workerAuth, (req, res) => {
       return;
     }
     const reply = WorkerReplySchema.parse(req.body);
-    const job = store.submitReply(req.params.id, leaseToken, reply);
+    const job = store.submitReply(String(req.params.id), leaseToken, reply);
     res.json({ ok: true, state: job.state });
   } catch (error) {
     res.status(409).json({ error: error instanceof Error ? error.message : "RESULT_REJECTED" });
@@ -82,7 +84,7 @@ app.post("/worker/v1/jobs/:id/result", workerAuth, (req, res) => {
 });
 
 app.post("/worker/v1/jobs/:id/cancel", workerAuth, (req, res) => {
-  const job = store.cancel(req.params.id);
+  const job = store.cancel(String(req.params.id));
   res.status(job ? 200 : 404).json(job ? { state: job.state } : { error: "JOB_NOT_FOUND" });
 });
 

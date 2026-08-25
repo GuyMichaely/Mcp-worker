@@ -22,7 +22,7 @@ export function createMachineMcpHandler(relay: RelayService) {
           inputSchema: spec.inputSchema,
           annotations: spec.annotations
         },
-        async (argumentsValue, ctx) => {
+        async (argumentsValue: unknown, ctx: any) => {
           try {
             const result = await relay.call(
               spec.name,
