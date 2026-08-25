@@ -28,6 +28,8 @@ describe("relay transfers", () => {
     expect(() => store.appendTransferChunk({ ...common, offset: 1, bytes: bytes.subarray(7) })).toThrow("TRANSFER_OFFSET_MISMATCH");
     expect(store.appendTransferChunk({ ...common, offset: 7, bytes: bytes.subarray(7) }).state).toBe("ready");
     expect(store.readTransfer(id)?.bytes).toEqual(bytes);
+    expect(() => store.appendTransferChunk({ ...common, size: bytes.length + 1, offset: 0, bytes: Buffer.alloc(0) }))
+      .toThrow("TRANSFER_METADATA_CONFLICT");
   });
 
   it("rejects oversized and expired transfers", () => {

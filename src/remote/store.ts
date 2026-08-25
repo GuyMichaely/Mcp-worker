@@ -278,7 +278,6 @@ export class RelayStore {
     if (!/^[a-f0-9]{64}$/i.test(input.sha256)) throw new Error("INVALID_TRANSFER_HASH");
     this.sweepTransfers(now);
     let transfer = this.getTransfer(input.id, true);
-    if (transfer?.state === "ready") return transfer;
     if (!transfer) {
       if (input.offset !== 0) throw new Error("TRANSFER_OFFSET_MISMATCH");
       const localPath = join(this.transferDirectory, `${input.id}.part`);
@@ -293,6 +292,7 @@ export class RelayStore {
     if (transfer.workerId !== input.workerId || transfer.size !== input.size || transfer.sha256 !== input.sha256.toLowerCase()) {
       throw new Error("TRANSFER_METADATA_CONFLICT");
     }
+    if (transfer.state === "ready") return transfer;
     if (transfer.receivedBytes !== input.offset) throw new Error("TRANSFER_OFFSET_MISMATCH");
     if (input.offset + input.bytes.length > input.size) throw new Error("TRANSFER_SIZE_MISMATCH");
     if (input.bytes.length) appendFileSync(transfer.localPath, input.bytes);
