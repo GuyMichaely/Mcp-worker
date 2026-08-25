@@ -93,7 +93,15 @@ export class ProcessManager {
     return session;
   }
 
-  async runStrict(spec: ProcessSpec, cwd: string, environment: Record<string, string>, timeoutMs: number, network: boolean, stdin?: string) {
+  async runStrict(
+    spec: ProcessSpec,
+    cwd: string,
+    environment: Record<string, string>,
+    timeoutMs: number,
+    network: boolean,
+    stdin?: string,
+    signal?: AbortSignal
+  ) {
     const resolved = resolveCommand(spec);
     return this.native.call<Record<string, unknown>>("process.run", {
       executable: resolved.executable,
@@ -104,7 +112,7 @@ export class ProcessManager {
       network,
       stdin: stdin ?? "",
       read_write_paths: [this.runtime.config.paths.workspace]
-    }, timeoutMs + 10_000);
+    }, timeoutMs + 10_000, signal);
   }
 
   get(id: string): Session {
@@ -144,7 +152,7 @@ export function registerProcessTools(server: McpServer, runtime: Runtime, manage
       timeout_ms: z.number().int().positive().optional()
     },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
-  }, async ({ spec, cwd, environment, mode, network, stdin, timeout_ms }) => {
+  }, async ({ spec, cwd, environment, mode, network, stdin, timeout_ms }, extra) => {
     const execution = actualMode(runtime, mode);
     const capability = execution === "strict" ? "process.execute.sandboxed" as const : "process.execute.unsandboxed" as const;
     const resolved = resolveCommand(spec);
@@ -159,17 +167,32 @@ export function registerProcessTools(server: McpServer, runtime: Runtime, manage
       tool: "process_run", capability, subject: { kind: "executable", value: path.resolve(resolved.executable) }
     }, `Run ${resolved.display} in ${cwd} using ${execution} mode${network ? " with network" : " without network"}`, async () => {
       if (execution === "strict") {
-        return manager.runStrict(spec, cwd, environment, timeout, network, stdin);
+        return manager.runStrict(spec, cwd, environment, timeout, network, stdin, extra.signal);
       }
       const session = manager.start(spec, cwd, environment);
       if (stdin !== undefined) session.child.stdin.end(stdin); else session.child.stdin.end();
       await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          clearTimeout(timer);
+          extra.signal.removeEventListener("abort", abort);
+        };
+        const abort = () => {
+          session.child.kill();
+          cleanup();
+          reject(new Error("CANCELLED: Process execution was cancelled."));
+        };
         const timer = setTimeout(() => {
           session.child.kill();
+          cleanup();
           reject(new Error(`Process timed out after ${timeout} ms.`));
         }, timeout);
-        session.child.once("exit", () => { clearTimeout(timer); resolve(); });
-        session.child.once("error", (error) => { clearTimeout(timer); reject(error); });
+        if (extra.signal.aborted) {
+          abort();
+          return;
+        }
+        extra.signal.addEventListener("abort", abort, { once: true });
+        session.child.once("exit", () => { cleanup(); resolve(); });
+        session.child.once("error", (error) => { cleanup(); reject(error); });
       });
       return {
         session_id: session.id,
