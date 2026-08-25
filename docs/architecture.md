@@ -25,13 +25,13 @@ The relay correlation ID is attached to the local audit record. The local audit 
 
 Read-only jobs can return to the queue after a lost lease. A mutation with an expired lease becomes `indeterminate`; the relay does not retry it. An identical duplicate result is accepted, while a conflicting result is rejected.
 
-Queued and approval-pending work can be cancelled. Cancellation after a mutation lease begins is reported as indeterminate because the effect may already exist.
+Queued and approval-pending work can be cancelled. A leased read-only job can also be cancelled deterministically. The worker polls the state of its active lease and propagates cancellation into the local MCP call. Long-running process execution terminates its child process or native helper when that signal arrives. Cancellation after a mutation lease begins remains `indeterminate` because the effect may already exist.
 
 ## Files
 
-`file_import` gives the worker a ChatGPT-authorized download URL and an allowed local destination. The worker streams the file directly to a temporary local path, verifies an optional hash, and renames it into place.
+`file_import` gives the worker a ChatGPT-authorized download URL and an allowed local destination. The worker streams the file directly to a temporary local path, enforces the configured transfer-size limit even when `Content-Length` is absent or incorrect, verifies an optional hash, and renames it into place.
 
-`file_export` copies an allowed local file into the worker's expiring transfer area. The outbound client uploads it to the relay in 1 MiB chunks. The relay checks worker ownership, offsets, maximum size, expiry, and SHA-256 before marking it ready. ChatGPT receives a `machine-file://` resource link, and the MCP resource reader returns the verified bytes. Expired transfer rows and files are removed during transfer activity.
+`file_export` copies an allowed local file into the worker's expiring transfer area. The outbound client uploads it to the relay in 1 MiB chunks. The relay checks worker ownership, offsets, maximum size, expiry, and SHA-256 before marking it ready. ChatGPT receives a `machine-file://` resource link, and the MCP resource reader returns the verified bytes. Expired transfer rows and files are removed by periodic relay maintenance as well as during transfer activity.
 
 ## Processes and desktop state
 
@@ -41,6 +41,6 @@ Desktop tools use the included .NET helper. The helper reports locked or non-int
 
 ## Storage
 
-The relay uses Node's built-in SQLite driver in WAL mode and a persistent transfer directory. The Windows worker keeps its configuration, audit SQLite database, transfers, trash, logs, and runtime files in its per-user data directory.
+The relay uses Node's built-in SQLite driver in WAL mode and a persistent transfer directory. Schema changes are applied through ordered migrations, and the relay refuses to open a database whose schema version is newer than the code supports. The Windows worker keeps its configuration, audit SQLite database, transfers, trash, logs, and runtime files in its per-user data directory.
 
-The initial relay design assumes one service process. Running several relay processes requires a shared database and a different leasing design.
+The relay design assumes one service process. Running several relay processes requires a shared database and a different leasing design.
