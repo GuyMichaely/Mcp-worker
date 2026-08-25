@@ -1,0 +1,138 @@
+name: Cancellation patch
+
+on:
+  push:
+    branches:
+      - agent/mcp-streamable-http-e2e
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/mcp-streamable-http-e2e
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install
+      - name: Wire active cancellation into store and process tools
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          store = Path('src/remote/store.ts')
+          s = store.read_text()
+          old = '''  cancel(id: string, now = Date.now()): StoredJob | undefined {
+    this.db.prepare("UPDATE jobs SET state='cancelled',updated_at=? WHERE id=? AND state IN ('queued','approval-pending')").run(now, id);
+    this.db.prepare("UPDATE jobs SET state='indeterminate',error_json=?,updated_at=? WHERE id=? AND state='leased' AND read_only=0")
+      .run(JSON.stringify({ code: "CANCELLED_INDETERMINATE", message: "Cancellation arrived after a mutation may have started." }), now, id);
+    return this.get(id);
+  }
+'''
+          new = '''  cancel(id: string, now = Date.now()): StoredJob | undefined {
+    this.db.prepare("UPDATE jobs SET state='cancelled',lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=? AND (state IN ('queued','approval-pending') OR (state='leased' AND read_only=1))")
+      .run(now, id);
+    this.db.prepare("UPDATE jobs SET state='indeterminate',lease_token=NULL,lease_expires_at=NULL,error_json=?,updated_at=? WHERE id=? AND state='leased' AND read_only=0")
+      .run(JSON.stringify({ code: "CANCELLED_INDETERMINATE", message: "Cancellation arrived after a mutation may have started." }), now, id);
+    return this.get(id);
+  }
+'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('RelayStore.cancel marker not found')
+          store.write_text(s)
+
+          process = Path('packages/windows-worker/src/process-tools.ts')
+          s = process.read_text()
+          old = '''  async runStrict(spec: ProcessSpec, cwd: string, environment: Record<string, string>, timeoutMs: number, network: boolean, stdin?: string) {
+    const resolved = resolveCommand(spec);
+    return this.native.call<Record<string, unknown>>("process.run", {
+'''
+          new = '''  async runStrict(spec: ProcessSpec, cwd: string, environment: Record<string, string>, timeoutMs: number, network: boolean, stdin?: string, signal?: AbortSignal) {
+    const resolved = resolveCommand(spec);
+    return this.native.call<Record<string, unknown>>("process.run", {
+'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('runStrict signature marker not found')
+          old = '''      read_write_paths: [this.runtime.config.paths.workspace]
+    }, timeoutMs + 10_000);
+'''
+          new = '''      read_write_paths: [this.runtime.config.paths.workspace]
+    }, timeoutMs + 10_000, signal);
+'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('runStrict native call marker not found')
+          old = '''  }, async ({ spec, cwd, environment, mode, network, stdin, timeout_ms }) => {
+'''
+          new = '''  }, async ({ spec, cwd, environment, mode, network, stdin, timeout_ms }, extra) => {
+'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('process_run callback marker not found')
+          old = '''        return manager.runStrict(spec, cwd, environment, timeout, network, stdin);
+'''
+          new = '''        return manager.runStrict(spec, cwd, environment, timeout, network, stdin, extra.signal);
+'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('strict process call marker not found')
+          old = '''      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          session.child.kill();
+          reject(new Error(`Process timed out after ${timeout} ms.`));
+        }, timeout);
+        session.child.once("exit", () => { clearTimeout(timer); resolve(); });
+        session.child.once("error", (error) => { clearTimeout(timer); reject(error); });
+      });
+'''
+          new = '''      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          clearTimeout(timer);
+          extra.signal.removeEventListener("abort", abort);
+        };
+        const abort = () => {
+          session.child.kill();
+          cleanup();
+          reject(new Error("CANCELLED: Process execution was cancelled."));
+        };
+        const timer = setTimeout(() => {
+          session.child.kill();
+          cleanup();
+          reject(new Error(`Process timed out after ${timeout} ms.`));
+        }, timeout);
+        if (extra.signal.aborted) {
+          abort();
+          return;
+        }
+        extra.signal.addEventListener("abort", abort, { once: true });
+        session.child.once("exit", () => { cleanup(); resolve(); });
+        session.child.once("error", (error) => { cleanup(); reject(error); });
+      });
+'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('process wait marker not found')
+          process.write_text(s)
+          PY
+      - run: npm run build
+      - run: npm test
+      - name: Commit cancellation wiring and remove helper workflow
+        run: |
+          rm .github/workflows/cancellation-patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/remote/store.ts packages/windows-worker/src/process-tools.ts .github/workflows/cancellation-patch.yml
+          git commit -m "feat: actively cancel in-flight worker execution"
+          git push origin HEAD:agent/mcp-streamable-http-e2e
