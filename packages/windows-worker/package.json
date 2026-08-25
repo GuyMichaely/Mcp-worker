@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "native:build": "dotnet build native/ChatGptMachine.Native/ChatGptMachine.Native.csproj -c Release",
     "native:publish": "dotnet publish native/ChatGptMachine.Native/ChatGptMachine.Native.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true",
-    "smoke:native": "node scripts/native-smoke.mjs"
+    "smoke:native": "node scripts/native-smoke.mjs",
+    "smoke:credential": "node scripts/credential-smoke.mjs"
   },
   "engines": { "node": ">=24" },
   "dependencies": {
