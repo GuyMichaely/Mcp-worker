@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { JobState, RelayJob, WorkerReply } from "../shared/contracts.js";
 import { PROTOCOL_VERSION } from "../shared/contracts.js";
 import { canonicalJson } from "../shared/security.js";
+import { migrateRelayDatabase } from "./migrations.js";
 
 export interface StoredJob {
   id: string;
@@ -58,59 +59,7 @@ export class RelayStore {
     this.maxFileBytes = maxFileBytes;
     mkdirSync(this.transferDirectory, { recursive: true });
     this.db = new DatabaseSync(path);
-    this.db.exec(`
-      PRAGMA journal_mode=WAL;
-      PRAGMA foreign_keys=ON;
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version INTEGER PRIMARY KEY,
-        applied_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS workers (
-        worker_id TEXT PRIMARY KEY,
-        last_seen INTEGER NOT NULL,
-        version TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS jobs (
-        id TEXT PRIMARY KEY,
-        worker_id TEXT NOT NULL,
-        tool_name TEXT NOT NULL,
-        arguments_json TEXT NOT NULL,
-        request_hash TEXT NOT NULL,
-        state TEXT NOT NULL,
-        read_only INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL,
-        attempt INTEGER NOT NULL DEFAULT 0,
-        lease_token TEXT,
-        lease_expires_at INTEGER,
-        approval_ticket TEXT UNIQUE,
-        approval_expires_at INTEGER,
-        approved INTEGER NOT NULL DEFAULT 0,
-        result_json TEXT,
-        error_json TEXT,
-        correlation_id TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS jobs_worker_state ON jobs(worker_id, state, created_at);
-      CREATE TABLE IF NOT EXISTS transfers (
-        id TEXT PRIMARY KEY,
-        worker_id TEXT NOT NULL,
-        file_name TEXT NOT NULL,
-        mime_type TEXT NOT NULL,
-        size INTEGER NOT NULL,
-        sha256 TEXT NOT NULL,
-        expires_at INTEGER NOT NULL,
-        received_bytes INTEGER NOT NULL,
-        state TEXT NOT NULL,
-        local_path TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS transfers_expiry ON transfers(state, expires_at);
-    `);
-    const appliedAt = Date.now();
-    this.db.prepare("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(1,?)").run(appliedAt);
-    this.db.prepare("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(2,?)").run(appliedAt);
+    migrateRelayDatabase(this.db);
   }
 
   close(): void {
