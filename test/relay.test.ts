@@ -58,4 +58,30 @@ describe("relay service", () => {
     });
     await expect(call).resolves.toEqual({ bytesWritten: 1 });
   });
+
+  it("rejects a resumed approval when the action arguments changed", async () => {
+    const store = new RelayStore(":memory:");
+    stores.push(store);
+    store.heartbeat("w", "test");
+    const relay = new RelayService(store, "w", 5_000, 5_000);
+    const original = { path: "C:\\workspace\\a.txt", text: "x", create_parent: false };
+    const begin = relay.beginCall("fs_write", original);
+    let job;
+    while (!(job = store.lease("w"))) await pause();
+    const ticket = "c".repeat(64);
+    store.submitReply(job.id, job.leaseToken, {
+      kind: "approval-required",
+      requestHash: job.requestHash,
+      ticket,
+      summary: "Write a.txt?",
+      expiresAt: new Date(Date.now() + 2_000).toISOString()
+    });
+    const step = await begin;
+    expect(step.kind).toBe("approval-required");
+    if (step.kind !== "approval-required") throw new Error("Expected approval-required");
+    await expect(relay.resumeCall("fs_write", { ...original, text: "changed" }, step.prompt, true)).rejects.toMatchObject({
+      code: "APPROVAL_MISMATCH"
+    });
+    expect(store.get(job.id)?.state).toBe("approval-pending");
+  });
 });
