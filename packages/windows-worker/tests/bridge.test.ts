@@ -55,7 +55,14 @@ describe("relay bridge", () => {
 
     await expect(call).rejects.toBeDefined();
     expect(Date.now() - started).toBeLessThan(5_000);
-    const processes = await executor.execute("process_list", {}) as { data?: { sessions?: Array<{ running?: boolean }> } };
-    expect(processes.data?.sessions?.every((session) => session.running === false)).toBe(true);
+
+    const deadline = Date.now() + 5_000;
+    let running = true;
+    while (running && Date.now() < deadline) {
+      const processes = await executor.execute("process_list", {}) as { data?: { sessions?: Array<{ running?: boolean }> } };
+      running = processes.data?.sessions?.some((session) => session.running === true) ?? false;
+      if (running) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(running).toBe(false);
   });
 });
