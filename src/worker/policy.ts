@@ -1,42 +1,24 @@
 import { randomUUID } from "node:crypto";
 import type { RelayJob } from "../shared/contracts.js";
 
-export type PolicyDecision = "allow" | "deny" | "prompt";
-
-interface Ticket {
-  requestHash: string;
-  expiresAt: number;
-  used: boolean;
-}
+interface Ticket { requestHash: string; summary: string; expiresAt: number; used: boolean }
 
 export class PolicyEngine {
   private readonly tickets = new Map<string, Ticket>();
 
-  constructor(private readonly profile = "mostly-unattended") {}
-
-  decide(job: RelayJob): PolicyDecision {
-    if (job.toolName === "machine_status" || job.toolName === "file_read") return "allow";
-    if (this.profile === "read-only") return "deny";
-    return "prompt";
-  }
-
-  createApproval(job: RelayJob, ttlMs = 60_000): { ticket: string; expiresAt: number; summary: string } {
+  createApproval(job: RelayJob, summary: string, ttlMs = 60_000) {
     const ticket = randomUUID() + randomUUID();
     const expiresAt = Math.min(Date.parse(job.expiresAt), Date.now() + ttlMs);
-    this.tickets.set(ticket, { requestHash: job.requestHash, expiresAt, used: false });
-    return {
-      ticket,
-      expiresAt,
-      summary: `Allow ${job.toolName} with request hash ${job.requestHash.slice(0, 12)} on worker ${job.workerId}?`
-    };
+    this.tickets.set(ticket, { requestHash: job.requestHash, summary, expiresAt, used: false });
+    return { ticket, expiresAt, summary: `Approve this action?\n\n${summary}` };
   }
 
-  consumeApproval(job: RelayJob): boolean {
+  consumeApproval(job: RelayJob): string | undefined {
     const ticketValue = job.approval?.ticket;
-    if (!ticketValue) return false;
+    if (!ticketValue) return undefined;
     const ticket = this.tickets.get(ticketValue);
-    if (!ticket || ticket.used || ticket.expiresAt <= Date.now() || ticket.requestHash !== job.requestHash) return false;
+    if (!ticket || ticket.used || ticket.expiresAt <= Date.now() || ticket.requestHash !== job.requestHash) return undefined;
     ticket.used = true;
-    return true;
+    return ticket.summary;
   }
 }

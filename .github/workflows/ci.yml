@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  relay:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -19,3 +19,18 @@ jobs:
       - run: npm install
       - run: npm run build
       - run: npm test
+
+  windows-worker:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: npm install
+      - run: npm run test:windows
+      - run: npm run native:build

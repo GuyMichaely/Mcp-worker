@@ -3,21 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "workspaces": ["packages/windows-worker"],
   "engines": { "node": ">=24" },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "build": "npm run build -w @mcp-worker/windows-worker && tsc -p tsconfig.json",
+    "test": "vitest run --dir test",
+    "test:watch": "vitest test",
+    "test:windows": "npm test -w @mcp-worker/windows-worker",
     "remote": "tsx src/remote/server.ts",
-    "worker": "tsx src/worker/client.ts"
+    "worker": "tsx src/worker/client.ts",
+    "native:build": "npm run native:build -w @mcp-worker/windows-worker",
+    "native:publish": "npm run native:publish -w @mcp-worker/windows-worker"
   },
   "dependencies": {
+    "@mcp-worker/windows-worker": "*",
     "@modelcontextprotocol/express": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "express": "^5.1.0",
     "jose": "^6.1.0",
-    "zod": "^4.1.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",

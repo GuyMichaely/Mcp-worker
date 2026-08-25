@@ -35,7 +35,7 @@ describe("relay service", () => {
     store.heartbeat("w", "test");
     const relay = new RelayService(store, "w", 5_000, 5_000);
     let prompted = false;
-    const call = relay.call("file_write", { path: "a.txt", content: "x", createParents: false }, async () => {
+    const call = relay.call("fs_write", { path: "C:\\workspace\\a.txt", text: "x", create_parent: false }, async () => {
       prompted = true;
       return true;
     });
