@@ -26,6 +26,16 @@ async function waitForJob(store: RelayStore) {
   return row.id;
 }
 
+async function waitForState(store: RelayStore, id: string, state: string, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const current = store.get(id);
+    if (current?.state === state) return current;
+    await pause();
+  }
+  throw new Error(`Timed out waiting for job ${id} to reach ${state}; current=${JSON.stringify(store.get(id))}`);
+}
+
 type MachineHandler = ReturnType<typeof createMachineMcpHandler>;
 interface Harness {
   client: Client;
@@ -105,6 +115,7 @@ describe("Streamable HTTP MCP", () => {
       summary: "Write a.txt?",
       expiresAt: new Date(Date.now() + 2_000).toISOString()
     });
+    await waitForState(store, first.id, "queued");
     const resumed = await lease(store);
     expect(resumed.approval).toEqual({ ticket, accepted: true });
     store.submitReply(resumed.id, resumed.leaseToken, {
@@ -154,7 +165,7 @@ describe("Streamable HTTP MCP", () => {
     const id = await waitForJob(store);
     controller.abort();
     await expect(call).rejects.toBeDefined();
-    expect(store.get(id)?.state).toBe("cancelled");
+    await waitForState(store, id, "cancelled");
     expect(store.lease(WORKER_ID)).toBeUndefined();
   });
 
