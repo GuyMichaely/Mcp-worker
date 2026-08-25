@@ -56,7 +56,10 @@ async function createHarness(options: { online?: boolean; approve?: boolean } = 
   });
   const client = new Client(
     { name: "mcp-worker-test", version: "1.0.0" },
-    { capabilities: { elicitation: { form: {} } } }
+    {
+      capabilities: { elicitation: { form: {} } },
+      versionNegotiation: { mode: { pin: "2026-07-28" } }
+    }
   );
   client.setRequestHandler("elicitation/create", async () =>
     options.approve === false
@@ -79,8 +82,9 @@ afterEach(async () => {
 });
 
 describe("Streamable HTTP MCP", () => {
-  it("initializes and discovers the complete tool catalog", async () => {
+  it("initializes in the modern era and discovers the complete tool catalog", async () => {
     const { client } = await createHarness();
+    expect(client.getProtocolEra()).toBe("modern");
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual(ToolSpecs.map((tool) => tool.name).sort());
   });
