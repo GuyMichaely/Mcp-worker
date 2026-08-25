@@ -40,7 +40,11 @@ describe("relay store", () => {
     }, 1_000);
     store.lease("w", 100, 1_001);
     store.sweep(1_102);
-    expect(store.lease("w", 100, 1_103)?.attempt).toBe(2);
+    const retriedRead = store.lease("w", 100, 1_103)!;
+    expect(retriedRead.attempt).toBe(2);
+    store.submitReply(retriedRead.id, retriedRead.leaseToken, {
+      kind: "completed", requestHash: retriedRead.requestHash, result: { content: "a" }
+    }, 1_104);
 
     const writeHash = requestHash("file_write", { path: "a", content: "x" });
     const write = store.createJob({
