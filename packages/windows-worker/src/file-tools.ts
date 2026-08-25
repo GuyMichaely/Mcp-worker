@@ -1,13 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pipeline } from "node:stream/promises";
-import { Readable } from "node:stream";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Runtime } from "./runtime.js";
 import { canonicalizeExistingPath, canonicalizeProspectivePath } from "./path-policy.js";
 import { asMcpResult } from "./mcp-result.js";
+import { downloadResponseToFile } from "./transfer.js";
 
 const PathSchema = z.string().min(1).describe("An absolute Windows path.");
 
@@ -336,17 +335,16 @@ export function registerFileTools(server: McpServer, runtime: Runtime): void {
       tool: "file_import", capability: "transfer.import", subject: pathSubject(canonical)
     }, `Import ChatGPT file ${file.file_name ?? file.file_id} to ${destination}`, async () => {
       const response = await fetch(file.download_url, { redirect: "follow" });
-      if (!response.ok || !response.body) throw new Error(`Download failed with HTTP ${response.status}.`);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       const temporary = `${destination}.${crypto.randomUUID()}.tmp`;
-      await pipeline(Readable.fromWeb(response.body as never), fs.createWriteStream(temporary, { flags: "wx" }));
+      const bytes = await downloadResponseToFile(response, temporary, runtime.config.limits.maxTransferBytes);
       const sha256 = await hashFile(temporary);
       if (expected_sha256 && sha256.toLowerCase() !== expected_sha256.toLowerCase()) {
         fs.rmSync(temporary, { force: true });
         throw new Error(`SHA-256 mismatch. Expected ${expected_sha256}, found ${sha256}.`);
       }
       fs.renameSync(temporary, destination);
-      return { destination, file_id: file.file_id, bytes: fs.statSync(destination).size, sha256 };
+      return { destination, file_id: file.file_id, bytes, sha256 };
     }));
   });
 
