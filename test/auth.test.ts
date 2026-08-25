@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import express from "express";
-import { exportJWK, generateKeyPair, SignJWT, type KeyLike } from "jose";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { AppConfig } from "../src/config.js";
 import { requireMcp, requireWorker } from "../src/remote/auth.js";
@@ -12,7 +12,7 @@ const issuer = "https://issuer.example";
 const audience = "mcp-worker";
 const requiredScope = "mcp:tools";
 
-let signingKey: KeyLike;
+let signingKey: CryptoKey;
 let jwksServer: Server;
 let appServer: Server;
 let baseUrl: string;
@@ -44,10 +44,9 @@ async function token(overrides: {
 }
 
 async function request(path: string, bearer?: string) {
-  return fetch(`${baseUrl}${path}`, {
-    method: "POST",
-    headers: bearer ? { authorization: `Bearer ${bearer}` } : undefined
-  });
+  const init: RequestInit = { method: "POST" };
+  if (bearer) init.headers = { authorization: `Bearer ${bearer}` };
+  return fetch(`${baseUrl}${path}`, init);
 }
 
 beforeAll(async () => {
