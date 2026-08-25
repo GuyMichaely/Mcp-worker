@@ -67,6 +67,15 @@ export function createRemoteApp(config: AppConfig, store: RelayStore, relay: Rel
     res.json(job ? { job: RelayJobSchema.parse(job) } : { job: null });
   });
 
+  app.get("/worker/v1/jobs/:id/state", workerAuth, (req, res) => {
+    const job = store.get(String(req.params.id));
+    if (!job || job.workerId !== config.WORKER_ID) {
+      res.status(404).json({ error: "JOB_NOT_FOUND" });
+      return;
+    }
+    res.json({ state: job.state });
+  });
+
   app.post("/worker/v1/jobs/:id/result", workerAuth, (req, res) => {
     try {
       const leaseToken = req.header("x-lease-token");
