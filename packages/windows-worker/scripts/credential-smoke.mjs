@@ -22,7 +22,7 @@ function call(method, params) {
         const line = stdout.trim().split(/\r?\n/).at(-1);
         if (!line) throw new Error(stderr || "Native helper returned no response.");
         const response = JSON.parse(line);
-        if (!response.ok) throw new Error(response.error?.message ?? stderr || "Native helper failed.");
+        if (!response.ok) throw new Error(response.error?.message ?? (stderr || "Native helper failed."));
         resolve(response.result);
       } catch (error) { reject(error); }
     });
