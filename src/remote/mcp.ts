@@ -10,7 +10,7 @@ import {
   ResourceTemplate
 } from "@modelcontextprotocol/server";
 import { ToolSpecs } from "../shared/contracts.js";
-import type { ApprovalPrompt, RelayCallStep, RelayService } from "./relay.js";
+import type { ApprovalPrompt, RelayService } from "./relay.js";
 import type { RelayStore } from "./store.js";
 
 interface ApprovalState extends ApprovalPrompt {
@@ -66,7 +66,7 @@ export function createMachineMcpHandler(relay: RelayService, store?: RelayStore)
         async (argumentsValue: unknown, ctx: any) => {
           try {
             const argumentsObject = argumentsValue as Record<string, unknown>;
-            const state = ctx.mcpReq.requestState<ApprovalState>();
+            const state = ctx.mcpReq.requestState() as ApprovalState | undefined;
             let result: unknown;
 
             if (state) {
