@@ -68,6 +68,7 @@ export const ConfigSchema = z.object({
   limits: z.object({
     maxReadBytes: z.number().int().positive().default(1_048_576),
     maxProcessOutputBytes: z.number().int().positive().default(268_435_456),
+    maxTransferBytes: z.number().int().positive().default(268_435_456),
     defaultProcessTimeoutMs: z.number().int().positive().default(300_000),
     transferChunkBytes: z.number().int().min(65_536).max(8_388_608).default(1_048_576)
   }),
