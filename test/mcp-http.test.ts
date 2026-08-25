@@ -26,10 +26,16 @@ async function waitForJob(store: RelayStore) {
   return row.id;
 }
 
-type Harness = Awaited<ReturnType<typeof createHarness>>;
+type MachineHandler = ReturnType<typeof createMachineMcpHandler>;
+interface Harness {
+  client: Client;
+  handler: MachineHandler;
+  store: RelayStore;
+  directory: string;
+}
 const harnesses: Harness[] = [];
 
-async function createHarness(options: { online?: boolean; approve?: boolean } = {}) {
+async function createHarness(options: { online?: boolean; approve?: boolean } = {}): Promise<Harness> {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-http-"));
   const store = new RelayStore(":memory:", directory, 1024 * 1024);
   if (options.online !== false) store.heartbeat(WORKER_ID, "test");
@@ -48,7 +54,7 @@ async function createHarness(options: { online?: boolean; approve?: boolean } = 
       : { action: "accept", content: { approve: true } }
   );
   await client.connect(transport);
-  const harness = { client, handler, store, directory };
+  const harness: Harness = { client, handler, store, directory };
   harnesses.push(harness);
   return harness;
 }
