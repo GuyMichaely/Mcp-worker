@@ -15,7 +15,14 @@ server.listen(config.PORT, config.BIND_HOST, () => {
   console.log(JSON.stringify({ event: "remote_started", bind: config.BIND_HOST, port: config.PORT }));
 });
 
+const maintenance = setInterval(() => {
+  store.sweep();
+  store.sweepTransfers();
+}, 60_000);
+maintenance.unref();
+
 async function shutdown(): Promise<void> {
+  clearInterval(maintenance);
   await mcp.close();
   server.close(() => {
     store.close();
