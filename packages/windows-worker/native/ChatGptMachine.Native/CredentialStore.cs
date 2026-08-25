@@ -20,12 +20,30 @@ internal static class CredentialStore
     internal static object Test()
     {
         var target = $"ChatGptMachineMcp.Test.{Guid.NewGuid():N}";
+        var expected = $"credential-manager-test-{Guid.NewGuid():N}";
         try
         {
-            Write(target, "credential-manager-test");
+            Write(target, expected);
             if (!NativeMethods.CredReadW(target, 1, 0, out var pointer)) throw new Win32Exception(Marshal.GetLastWin32Error());
-            NativeMethods.CredFree(pointer);
-            return new { available = true };
+            try
+            {
+                var credential = Marshal.PtrToStructure<NativeMethods.CREDENTIAL>(pointer);
+                var bytes = new byte[credential.CredentialBlobSize];
+                Marshal.Copy(credential.CredentialBlob, bytes, 0, bytes.Length);
+                try
+                {
+                    var actual = Encoding.Unicode.GetString(bytes);
+                    if (!CryptographicOperations.FixedTimeEquals(
+                        Encoding.UTF8.GetBytes(expected),
+                        Encoding.UTF8.GetBytes(actual)))
+                    {
+                        throw new InvalidOperationException("Credential Manager returned different secret bytes than were written.");
+                    }
+                    return new { available = true, round_trip = true, user = Environment.UserName };
+                }
+                finally { CryptographicOperations.ZeroMemory(bytes); }
+            }
+            finally { NativeMethods.CredFree(pointer); }
         }
         finally { NativeMethods.CredDeleteW(target, 1, 0); }
     }
