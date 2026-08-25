@@ -1,16 +1,36 @@
+import { randomBytes } from "node:crypto";
 import * as z from "zod/v4";
-import { createMcpHandler, McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
+import {
+  acceptedContent,
+  createMcpHandler,
+  createRequestStateCodec,
+  inputRequired,
+  inputResponse,
+  McpServer,
+  ResourceTemplate
+} from "@modelcontextprotocol/server";
 import { ToolSpecs } from "../shared/contracts.js";
-import type { RelayService } from "./relay.js";
+import type { ApprovalPrompt, RelayCallStep, RelayService } from "./relay.js";
 import type { RelayStore } from "./store.js";
 
+interface ApprovalState extends ApprovalPrompt {
+  toolName: string;
+}
+
+const approvalSchema = z.object({
+  approve: z.boolean().meta({ title: "Approve this exact action" })
+});
+
 export function createMachineMcpHandler(relay: RelayService, store?: RelayStore) {
+  const stateCodec = createRequestStateCodec<ApprovalState>({ key: randomBytes(32), ttlSeconds: 600 });
+
   return createMcpHandler(() => {
     const server = new McpServer(
       { name: "mcp-worker", version: "0.1.0" },
       {
         instructions:
-          "Tools operate one authorized Windows worker. Read before changing when practical. A local policy decision can require exact-action approval. Never claim a cancelled, expired, or indeterminate mutation succeeded."
+          "Tools operate one authorized Windows worker. Read before changing when practical. A local policy decision can require exact-action approval. Never claim a cancelled, expired, or indeterminate mutation succeeded.",
+        requestState: { verify: stateCodec.verify }
       }
     );
 
@@ -45,41 +65,26 @@ export function createMachineMcpHandler(relay: RelayService, store?: RelayStore)
         },
         async (argumentsValue: unknown, ctx: any) => {
           try {
-            const result = await relay.call(
-              spec.name,
-              argumentsValue as Record<string, unknown>,
-              async (prompt) => {
-                try {
-                  const answer = await ctx.mcpReq.elicitInput(
-                    {
-                      mode: "form",
-                      message: prompt.summary,
-                      requestedSchema: {
-                        type: "object",
-                        properties: {
-                          approve: {
-                            type: "boolean",
-                            title: "Approve this exact action",
-                            default: false
-                          }
-                        },
-                        required: ["approve"]
-                      }
-                    },
-                    { timeout: Math.max(1_000, prompt.expiresAt - Date.now()), signal: ctx.mcpReq.signal }
-                  );
-                  return answer.action === "accept" && answer.content?.approve === true;
-                } catch {
-                  return false;
-                }
-              },
-              ctx.mcpReq.signal
-            );
-            const forwarded = forwardedContent(result);
-            return {
-              structuredContent: { ok: true, result },
-              content: forwarded ?? [{ type: "text" as const, text: JSON.stringify(result) }]
-            };
+            const argumentsObject = argumentsValue as Record<string, unknown>;
+            const state = ctx.mcpReq.requestState<ApprovalState>();
+            let result: unknown;
+
+            if (state) {
+              if (state.toolName !== spec.name) throw new Error("APPROVAL_TOOL_MISMATCH");
+              const response = inputResponse(ctx.mcpReq.inputResponses, "approval");
+              if (response.kind === "missing") return approvalInput(state, stateCodec);
+              const accepted =
+                response.kind === "elicit" &&
+                response.action === "accept" &&
+                acceptedContent(ctx.mcpReq.inputResponses, "approval", approvalSchema)?.approve === true;
+              result = await relay.resumeCall(spec.name, argumentsObject, state, accepted, ctx.mcpReq.signal);
+            } else {
+              const step = await relay.beginCall(spec.name, argumentsObject, ctx.mcpReq.signal);
+              if (step.kind === "approval-required") return approvalInput({ ...step.prompt, toolName: spec.name }, stateCodec);
+              result = step.result;
+            }
+
+            return successfulToolResult(result);
           } catch (error) {
             const code = error && typeof error === "object" && "code" in error ? String(error.code) : "TOOL_FAILED";
             const message = error instanceof Error ? error.message : "Tool call failed.";
@@ -94,6 +99,26 @@ export function createMachineMcpHandler(relay: RelayService, store?: RelayStore)
     }
     return server;
   });
+}
+
+async function approvalInput(
+  state: ApprovalState,
+  stateCodec: ReturnType<typeof createRequestStateCodec<ApprovalState>>
+) {
+  return inputRequired({
+    inputRequests: {
+      approval: inputRequired.elicit({ message: state.summary, requestedSchema: approvalSchema })
+    },
+    requestState: await stateCodec.mint(state)
+  });
+}
+
+function successfulToolResult(result: unknown) {
+  const forwarded = forwardedContent(result);
+  return {
+    structuredContent: { ok: true, result },
+    content: forwarded ?? [{ type: "text" as const, text: JSON.stringify(result) }]
+  };
 }
 
 function forwardedContent(result: unknown): any[] | undefined {
