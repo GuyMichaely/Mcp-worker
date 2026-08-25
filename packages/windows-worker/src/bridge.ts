@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { initializeConfig, resolveAppPaths, type AppPaths } from "./config.js";
 import { Runtime } from "./runtime.js";
 import { createServer } from "./server.js";
@@ -45,7 +45,13 @@ export class WindowsToolExecutor {
     return new WindowsToolExecutor(paths, runtime, client, options.startAdmin ?? true);
   }
 
-  async execute(toolName: string, args: Record<string, unknown>, approvedSummary?: string, correlationId?: string): Promise<unknown> {
+  async execute(
+    toolName: string,
+    args: Record<string, unknown>,
+    approvedSummary?: string,
+    correlationId?: string,
+    signal?: AbortSignal
+  ): Promise<unknown> {
     let requestedSummary: string | undefined;
     this.runtime.approvalHandler = async (summary) => {
       if (approvedSummary !== undefined && approvedSummary === summary) return "approved";
@@ -54,8 +60,16 @@ export class WindowsToolExecutor {
     };
     this.runtime.correlationId = correlationId;
     let result: CallToolResult;
-    try { result = await this.client.callTool({ name: toolName, arguments: args }) as CallToolResult; }
-    finally { this.runtime.approvalHandler = undefined; this.runtime.correlationId = undefined; }
+    try {
+      result = await this.client.callTool(
+        { name: toolName, arguments: args },
+        CallToolResultSchema,
+        signal ? { signal } : undefined
+      ) as CallToolResult;
+    } finally {
+      this.runtime.approvalHandler = undefined;
+      this.runtime.correlationId = undefined;
+    }
     if (requestedSummary !== undefined) throw new ApprovalNeeded(requestedSummary);
     const parsed = parseToolResult(result);
     if (!parsed || parsed.ok !== true) {
