@@ -211,8 +211,9 @@ export class RelayStore {
   }
 
   cancel(id: string, now = Date.now()): StoredJob | undefined {
-    this.db.prepare("UPDATE jobs SET state='cancelled',updated_at=? WHERE id=? AND state IN ('queued','approval-pending')").run(now, id);
-    this.db.prepare("UPDATE jobs SET state='indeterminate',error_json=?,updated_at=? WHERE id=? AND state='leased' AND read_only=0")
+    this.db.prepare("UPDATE jobs SET state='cancelled',lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=? AND (state IN ('queued','approval-pending') OR (state='leased' AND read_only=1))")
+      .run(now, id);
+    this.db.prepare("UPDATE jobs SET state='indeterminate',lease_token=NULL,lease_expires_at=NULL,error_json=?,updated_at=? WHERE id=? AND state='leased' AND read_only=0")
       .run(JSON.stringify({ code: "CANCELLED_INDETERMINATE", message: "Cancellation arrived after a mutation may have started." }), now, id);
     return this.get(id);
   }
