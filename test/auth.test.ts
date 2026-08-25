@@ -12,7 +12,7 @@ const issuer = "https://issuer.example";
 const audience = "mcp-worker";
 const requiredScope = "mcp:tools";
 
-let signingKey: CryptoKey;
+let signingKey: Parameters<SignJWT["sign"]>[0];
 let jwksServer: Server;
 let appServer: Server;
 let baseUrl: string;
