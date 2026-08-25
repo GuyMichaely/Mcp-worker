@@ -1,0 +1,56 @@
+name: Migration patch
+
+on:
+  push:
+    branches:
+      - agent/mcp-streamable-http-e2e
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/mcp-streamable-http-e2e
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install
+      - name: Wire ordered migrations into RelayStore
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('src/remote/store.ts')
+          s = p.read_text()
+          import_line = 'import { migrateRelayDatabase } from "./migrations.js";\n'
+          marker = 'import { canonicalJson } from "../shared/security.js";\n'
+          if import_line not in s:
+              if marker not in s:
+                  raise SystemExit('security import marker not found')
+              s = s.replace(marker, marker + import_line, 1)
+          pattern = re.compile(
+              r'    this\.db = new DatabaseSync\(path\);\n'
+              r'    this\.db\.exec\(`.*?'
+              r'    this\.db\.prepare\("INSERT OR IGNORE INTO schema_migrations\(version,applied_at\) VALUES\(2,\?\)"\)\.run\(appliedAt\);\n',
+              re.S
+          )
+          replacement = '    this.db = new DatabaseSync(path);\n    migrateRelayDatabase(this.db);\n'
+          s, count = pattern.subn(replacement, s, count=1)
+          if count != 1 and '    migrateRelayDatabase(this.db);\n' not in s:
+              raise SystemExit(f'constructor schema block replacement count={count}')
+          p.write_text(s)
+          PY
+      - run: npm run build
+      - run: npm test
+      - name: Commit migration wiring and remove helper workflow
+        run: |
+          rm .github/workflows/migration-patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/remote/store.ts .github/workflows/migration-patch.yml
+          git commit -m "feat: apply relay database migrations in order"
+          git push origin HEAD:agent/mcp-streamable-http-e2e
