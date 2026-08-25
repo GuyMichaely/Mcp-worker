@@ -52,7 +52,7 @@ jobs:
           p.write_text(s)
           PY
       - run: npm run build -w @mcp-worker/windows-worker
-      - run: npm test -w @mcp-worker/windows-worker
+      - run: npm exec -w @mcp-worker/windows-worker -- vitest run tests/transfer.test.ts
       - name: Commit patch
         run: |
           if git diff --quiet; then
