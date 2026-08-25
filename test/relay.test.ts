@@ -84,4 +84,40 @@ describe("relay service", () => {
     });
     expect(store.get(job.id)?.state).toBe("approval-pending");
   });
+
+  it("cancels leased read-only work deterministically", () => {
+    const store = new RelayStore(":memory:");
+    stores.push(store);
+    const job = store.createJob({
+      workerId: "w",
+      toolName: "machine_status",
+      arguments: {},
+      requestHash: "read-hash",
+      readOnly: true,
+      expiresAt: Date.now() + 5_000
+    });
+    const leased = store.lease("w");
+    expect(leased?.id).toBe(job.id);
+    expect(store.cancel(job.id)?.state).toBe("cancelled");
+    expect(store.get(job.id)?.leaseToken).toBeUndefined();
+  });
+
+  it("marks a cancelled leased mutation indeterminate", () => {
+    const store = new RelayStore(":memory:");
+    stores.push(store);
+    const job = store.createJob({
+      workerId: "w",
+      toolName: "fs_write",
+      arguments: { path: "C:\\workspace\\a.txt", text: "x", create_parent: false },
+      requestHash: "mutation-hash",
+      readOnly: false,
+      expiresAt: Date.now() + 5_000
+    });
+    const leased = store.lease("w");
+    expect(leased?.id).toBe(job.id);
+    const cancelled = store.cancel(job.id);
+    expect(cancelled?.state).toBe("indeterminate");
+    expect(cancelled?.leaseToken).toBeUndefined();
+    expect(cancelled?.error).toMatchObject({ code: "CANCELLED_INDETERMINATE" });
+  });
 });
