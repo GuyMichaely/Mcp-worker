@@ -2,7 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import fs from "node:fs";
 import { z } from "zod";
 import { ApprovalNeeded, WindowsToolError, WindowsToolExecutor } from "@mcp-worker/windows-worker/bridge";
-import { RelayJobSchema, WorkerReplySchema, type WorkerReply } from "../shared/contracts.js";
+import { RelayJobSchema, WorkerReplySchema, type JobState, type WorkerReply } from "../shared/contracts.js";
 import { PolicyEngine } from "./policy.js";
 
 const WorkerEnvironment = z.object({
@@ -22,11 +22,50 @@ const workerToken = config.WORKER_TOKEN ?? await executor.readWorkerCredential()
 if (workerToken.length < 32) throw new Error("The worker credential must contain at least 32 characters.");
 const policy = new PolicyEngine();
 const headers = { authorization: `Bearer ${workerToken}`, "content-type": "application/json" };
+const cancellationStates = new Set<JobState>(["cancelled", "indeterminate", "expired"]);
 
 async function post(path: string, body: unknown, extraHeaders: Record<string, string> = {}): Promise<Response> {
   return fetch(new URL(path, config.RELAY_URL), {
     method: "POST", headers: { ...headers, ...extraHeaders }, body: JSON.stringify(body), signal: AbortSignal.timeout(35_000)
   });
+}
+
+async function jobState(jobId: string, signal?: AbortSignal): Promise<JobState | undefined> {
+  const requestSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(5_000)])
+    : AbortSignal.timeout(5_000);
+  const response = await fetch(new URL(`/worker/v1/jobs/${jobId}/state`, config.RELAY_URL), {
+    method: "GET",
+    headers: { authorization: `Bearer ${workerToken}` },
+    signal: requestSignal
+  });
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(`JOB_STATE_${response.status}`);
+  return (await response.json() as { state: JobState }).state;
+}
+
+async function watchCancellation(jobId: string, execution: AbortController, stop: AbortSignal): Promise<void> {
+  while (!stop.aborted && !execution.signal.aborted) {
+    try {
+      await delay(250, undefined, { signal: stop });
+    } catch {
+      return;
+    }
+    try {
+      const state = await jobState(jobId, stop);
+      if (state === undefined || cancellationStates.has(state)) {
+        execution.abort();
+        return;
+      }
+    } catch (error) {
+      if (stop.aborted) return;
+      console.error(JSON.stringify({
+        event: "cancellation_watch_error",
+        jobId,
+        message: error instanceof Error ? error.message : "unknown"
+      }));
+    }
+  }
 }
 
 async function heartbeat(): Promise<void> {
@@ -36,7 +75,12 @@ async function heartbeat(): Promise<void> {
 
 async function submit(jobId: string, leaseToken: string, reply: WorkerReply): Promise<void> {
   const response = await post(`/worker/v1/jobs/${jobId}/result`, WorkerReplySchema.parse(reply), { "x-lease-token": leaseToken });
-  if (!response.ok) throw new Error(`RESULT_REJECTED_${response.status}`);
+  if (response.ok) return;
+  if (response.status === 409) {
+    const state = await jobState(jobId);
+    if (state !== undefined && cancellationStates.has(state)) return;
+  }
+  throw new Error(`RESULT_REJECTED_${response.status}`);
 }
 
 async function handle(raw: unknown): Promise<void> {
@@ -49,11 +93,18 @@ async function handle(raw: unknown): Promise<void> {
     });
     return;
   }
+
+  const execution = new AbortController();
+  const watcherStop = new AbortController();
+  const watcher = watchCancellation(job.id, execution, watcherStop.signal);
   try {
-    const result = await executor.execute(job.toolName, job.arguments, approvedSummary, job.correlationId);
-    await uploadExports(result);
+    const result = await executor.execute(job.toolName, job.arguments, approvedSummary, job.correlationId, execution.signal);
+    if (execution.signal.aborted) return;
+    await uploadExports(result, execution.signal);
+    if (execution.signal.aborted) return;
     await submit(job.id, job.leaseToken, { kind: "completed", requestHash: job.requestHash, result });
   } catch (error) {
+    if (execution.signal.aborted) return;
     if (error instanceof ApprovalNeeded) {
       const approval = policy.createApproval(job, error.summary);
       await submit(job.id, job.leaseToken, {
@@ -67,10 +118,13 @@ async function handle(raw: unknown): Promise<void> {
     await submit(job.id, job.leaseToken, {
       kind: "failed", requestHash: job.requestHash, error: { code, message, retryable: false }
     });
+  } finally {
+    watcherStop.abort();
+    await watcher;
   }
 }
 
-async function uploadExports(result: unknown): Promise<void> {
+async function uploadExports(result: unknown, signal?: AbortSignal): Promise<void> {
   const content = (result as { data?: { content?: unknown[] } } | undefined)?.data?.content;
   if (!Array.isArray(content)) return;
   for (const item of content) {
@@ -85,8 +139,12 @@ async function uploadExports(result: unknown): Promise<void> {
       const chunkBytes = 1_048_576;
       let offset = 0;
       do {
+        if (signal?.aborted) throw new Error("CANCELLED: Transfer upload was cancelled.");
         const buffer = Buffer.alloc(Math.min(chunkBytes, Math.max(0, transfer.size - offset)));
         const count = buffer.length ? fs.readSync(handle, buffer, 0, buffer.length, offset) : 0;
+        const requestSignal = signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(35_000)])
+          : AbortSignal.timeout(35_000);
         const response = await fetch(new URL(`/worker/v1/transfers/${match[1]}/chunks`, config.RELAY_URL), {
           method: "POST",
           headers: {
@@ -100,7 +158,7 @@ async function uploadExports(result: unknown): Promise<void> {
             "x-transfer-offset": String(offset)
           },
           body: buffer.subarray(0, count),
-          signal: AbortSignal.timeout(35_000)
+          signal: requestSignal
         });
         if (!response.ok) throw new Error(`TRANSFER_UPLOAD_${response.status}: ${await response.text()}`);
         offset += count;
