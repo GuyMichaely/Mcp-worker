@@ -11,21 +11,13 @@ import type { RelayStore } from "./store.js";
 export function createRemoteApp(config: AppConfig, store: RelayStore, relay: RelayService) {
   const mcp = createMachineMcpHandler(relay, store);
   const nodeMcp = toNodeHandler(mcp);
+  const baseOptions = { host: config.BIND_HOST, jsonLimit: `${config.MAX_JSON_BYTES}b` };
   const app = config.BIND_HOST === "127.0.0.1"
-    ? createMcpExpressApp({ host: config.BIND_HOST })
+    ? createMcpExpressApp(baseOptions)
     : createMcpExpressApp({
-        host: config.BIND_HOST,
+        ...baseOptions,
         allowedHosts: [new URL(config.PUBLIC_BASE_URL).hostname]
       });
-
-  app.use((req, res, next) => {
-    const length = Number(req.header("content-length") ?? 0);
-    if (req.is("application/json") && length > config.MAX_JSON_BYTES) {
-      res.status(413).json({ error: "REQUEST_TOO_LARGE" });
-      return;
-    }
-    next();
-  });
 
   app.get("/healthz", (_req, res) => {
     res.json({ status: "healthy", protocolVersion: "worker.v1" });
@@ -120,6 +112,11 @@ export function createRemoteApp(config: AppConfig, store: RelayStore, relay: Rel
   );
 
   app.use((error: unknown, _req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }, _next: unknown) => {
+    const status = error && typeof error === "object" && "status" in error ? Number(error.status) : 400;
+    if (status === 413) {
+      res.status(413).json({ error: "REQUEST_TOO_LARGE" });
+      return;
+    }
     const message = error instanceof Error ? error.message : "REQUEST_FAILED";
     res.status(400).json({ error: message });
   });
