@@ -34,3 +34,4 @@ jobs:
       - run: npm install
       - run: npm run test:windows
       - run: npm run native:build
+      - run: npm run smoke:credential -w @mcp-worker/windows-worker
