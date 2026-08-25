@@ -118,6 +118,7 @@ export function createDefaultConfig(): AppConfig {
     limits: {
       maxReadBytes: 1_048_576,
       maxProcessOutputBytes: 268_435_456,
+      maxTransferBytes: 268_435_456,
       defaultProcessTimeoutMs: 300_000,
       transferChunkBytes: 1_048_576
     },
