@@ -34,4 +34,28 @@ describe("relay bridge", () => {
     await expect(executor.execute("fs_delete", { path: target, permanent: false }, summary))
       .resolves.toMatchObject({ ok: true });
   });
+
+  it.runIf(process.platform === "win32")("aborts an in-flight process and leaves no running session", async () => {
+    const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-worker-cancel-"));
+    const executor = await WindowsToolExecutor.create({ dataDirectory, startAdmin: false });
+    executors.push(executor);
+    executor.runtime.config.activeProfile = "yolo";
+
+    const controller = new AbortController();
+    const started = Date.now();
+    const call = executor.execute("process_run", {
+      spec: { kind: "shell", shell: "powershell", command: "Start-Sleep -Seconds 30" },
+      cwd: executor.runtime.config.paths.workspace,
+      environment: {},
+      mode: "unsandboxed",
+      network: false,
+      timeout_ms: 30_000
+    }, undefined, undefined, controller.signal);
+    setTimeout(() => controller.abort(), 250);
+
+    await expect(call).rejects.toBeDefined();
+    expect(Date.now() - started).toBeLessThan(5_000);
+    const processes = await executor.execute("process_list", {}) as { data?: { sessions?: Array<{ running?: boolean }> } };
+    expect(processes.data?.sessions?.every((session) => session.running === false)).toBe(true);
+  });
 });
