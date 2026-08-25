@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm install
+      - run: npm ci
       - run: npm run build
       - run: npm test
 
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - run: npm install
+      - run: npm ci
       - run: npm run test:windows
       - run: npm run native:build
       - run: npm run smoke:credential -w @mcp-worker/windows-worker
