@@ -1,24 +1,24 @@
 # Mcp-worker
 
-A private, single-user bridge from ChatGPT to an authorized Windows worker.
+Mcp-worker connects ChatGPT to one authorized Windows worker.
 
-The remote Node service exposes a Streamable HTTP MCP endpoint and a durable HTTPS relay. The Windows worker makes outbound-only HTTPS requests, evaluates local policy, and dispatches authorized tools.
+A remote Node service exposes the Streamable HTTP MCP endpoint and a durable HTTPS relay. The Windows worker makes outbound HTTPS requests. It does not accept inbound internet connections.
 
-## Status
+## Current scope
 
-This repository contains the portable first implementation:
+The first implementation includes:
 
-- shared, versioned relay contracts and tool schemas
-- SQLite/WAL durable jobs with leases, expiry, deduplicated results, cancellation, and approval binding
-- separate OAuth access-token and worker-token verification
-- Streamable HTTP MCP endpoint, health/readiness endpoints, and versioned worker API
-- outbound-only Windows worker with long polling, bounded backoff, path policy, and exact-action approval tickets
-- unit and integration tests
-- setup, deployment, update, rollback, backup, and troubleshooting notes
+- shared tool and relay schemas
+- SQLite jobs with leases, expiry, result deduplication, cancellation, and approval binding
+- separate OAuth access-token and worker-token checks
+- health, readiness, MCP, heartbeat, polling, result, and cancellation endpoints
+- a Windows worker with path checks, process limits, secret filtering, and bounded retry
+- MCP elicitation for exact-action approval
+- tests and operating instructions
 
-Machine-specific public ingress, DNS, TLS, and OAuth identity-provider settings are deliberately configuration, not assumptions.
+DNS, TLS ingress, and the OAuth provider are not configured in code. The relay machine inventory shows that those choices still need an owner and machine setup.
 
-## Quick start
+## Run it
 
 ```powershell
 Copy-Item .env.example .env
@@ -28,10 +28,10 @@ npm run build
 npm run remote
 ```
 
-In another terminal:
+Start the worker in another terminal:
 
 ```powershell
 npm run worker
 ```
 
-See [docs/architecture.md](docs/architecture.md) and [docs/operations.md](docs/operations.md).
+Read [the architecture](docs/architecture.md) before changing the protocol. Use [the operations guide](docs/operations.md) for setup and recovery.
