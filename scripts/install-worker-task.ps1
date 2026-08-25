@@ -6,13 +6,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 $resolvedRepository = (Resolve-Path -LiteralPath $RepositoryPath).Path
-$node = (Get-Command node.exe -ErrorAction Stop).Source
 $entry = Join-Path $resolvedRepository "dist\src\worker\client.js"
 if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
   throw "Build the worker first. Missing: $entry"
 }
 
-$action = New-ScheduledTaskAction -Execute $node -Argument ('"' + $entry + '"') -WorkingDirectory $resolvedRepository
+$runner = Join-Path $resolvedRepository "scripts\run-worker.ps1"
+$powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
+$arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $runner + '" -RepositoryPath "' + $resolvedRepository + '"'
+$action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $resolvedRepository
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650) -Hidden
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited

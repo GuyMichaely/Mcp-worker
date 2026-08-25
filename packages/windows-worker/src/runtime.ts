@@ -12,6 +12,7 @@ export class Runtime {
   config: AppConfig;
   readonly audit: AuditStore;
   approvalHandler?: ApprovalHandler;
+  correlationId?: string;
 
   constructor(readonly paths: AppPaths) {
     this.config = loadConfig(paths);
@@ -77,7 +78,7 @@ export class Runtime {
         );
         const auditId = randomUUID();
         result.audit_id = auditId;
-        this.audit.record(auditId, decision, result.status, summary, performance.now() - started);
+        this.audit.record(auditId, decision, result.status, summary, performance.now() - started, this.correlationId);
         return result;
       }
       const approved = response.action === "accept" && response.content?.approved === true;
@@ -106,7 +107,7 @@ export class Runtime {
 
     const auditId = randomUUID();
     result.audit_id = auditId;
-    this.audit.record(auditId, decision, result.status, summary, performance.now() - started);
+    this.audit.record(auditId, decision, result.status, summary, performance.now() - started, this.correlationId);
     return result;
   }
 }

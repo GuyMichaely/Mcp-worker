@@ -1,6 +1,6 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { JobState, RelayJob, WorkerReply } from "../shared/contracts.js";
 import { PROTOCOL_VERSION } from "../shared/contracts.js";
@@ -26,6 +26,19 @@ export interface StoredJob {
   correlationId: string;
 }
 
+export interface StoredTransfer {
+  id: string;
+  workerId: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  expiresAt: number;
+  receivedBytes: number;
+  state: "uploading" | "ready";
+  localPath: string;
+}
+
 type Row = {
   id: string; worker_id: string; tool_name: string; arguments_json: string; request_hash: string;
   state: JobState; read_only: number; created_at: number; expires_at: number; attempt: number;
@@ -36,13 +49,22 @@ type Row = {
 
 export class RelayStore {
   readonly db: DatabaseSync;
+  private readonly transferDirectory: string;
+  private readonly maxFileBytes: number;
 
-  constructor(path: string) {
+  constructor(path: string, transferDirectory = join(dirname(path === ":memory:" ? "." : path), "transfers"), maxFileBytes = 268_435_456) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+    this.transferDirectory = transferDirectory;
+    this.maxFileBytes = maxFileBytes;
+    mkdirSync(this.transferDirectory, { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       PRAGMA foreign_keys=ON;
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS workers (
         worker_id TEXT PRIMARY KEY,
         last_seen INTEGER NOT NULL,
@@ -70,7 +92,25 @@ export class RelayStore {
         updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS jobs_worker_state ON jobs(worker_id, state, created_at);
+      CREATE TABLE IF NOT EXISTS transfers (
+        id TEXT PRIMARY KEY,
+        worker_id TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        received_bytes INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        local_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS transfers_expiry ON transfers(state, expires_at);
     `);
+    const appliedAt = Date.now();
+    this.db.prepare("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(1,?)").run(appliedAt);
+    this.db.prepare("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(2,?)").run(appliedAt);
   }
 
   close(): void {
@@ -226,5 +266,68 @@ export class RelayStore {
     this.db.prepare("UPDATE jobs SET state='indeterminate',error_json=?,updated_at=? WHERE id=? AND state='leased' AND read_only=0")
       .run(JSON.stringify({ code: "CANCELLED_INDETERMINATE", message: "Cancellation arrived after a mutation may have started." }), now, id);
     return this.get(id);
+  }
+
+  appendTransferChunk(input: {
+    id: string; workerId: string; fileName: string; mimeType: string; size: number;
+    sha256: string; expiresAt: number; offset: number; bytes: Buffer;
+  }, now = Date.now()): StoredTransfer {
+    if (!/^[0-9a-f-]{36}$/i.test(input.id)) throw new Error("INVALID_TRANSFER_ID");
+    if (input.size < 0 || input.size > this.maxFileBytes) throw new Error("FILE_SIZE_LIMIT");
+    if (input.expiresAt <= now) throw new Error("TRANSFER_EXPIRED");
+    if (!/^[a-f0-9]{64}$/i.test(input.sha256)) throw new Error("INVALID_TRANSFER_HASH");
+    this.sweepTransfers(now);
+    let transfer = this.getTransfer(input.id, true);
+    if (transfer?.state === "ready") return transfer;
+    if (!transfer) {
+      if (input.offset !== 0) throw new Error("TRANSFER_OFFSET_MISMATCH");
+      const localPath = join(this.transferDirectory, `${input.id}.part`);
+      writeFileSync(localPath, Buffer.alloc(0), { flag: "wx" });
+      this.db.prepare(`INSERT INTO transfers
+        (id,worker_id,file_name,mime_type,size,sha256,expires_at,received_bytes,state,local_path,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,0,'uploading',?,?,?)`)
+        .run(input.id, input.workerId, input.fileName.slice(0, 255), input.mimeType.slice(0, 255), input.size,
+          input.sha256.toLowerCase(), input.expiresAt, localPath, now, now);
+      transfer = this.getTransfer(input.id, true)!;
+    }
+    if (transfer.workerId !== input.workerId || transfer.size !== input.size || transfer.sha256 !== input.sha256.toLowerCase()) {
+      throw new Error("TRANSFER_METADATA_CONFLICT");
+    }
+    if (transfer.receivedBytes !== input.offset) throw new Error("TRANSFER_OFFSET_MISMATCH");
+    if (input.offset + input.bytes.length > input.size) throw new Error("TRANSFER_SIZE_MISMATCH");
+    if (input.bytes.length) appendFileSync(transfer.localPath, input.bytes);
+    const received = input.offset + input.bytes.length;
+    this.db.prepare("UPDATE transfers SET received_bytes=?,updated_at=? WHERE id=?").run(received, now, input.id);
+    if (received === input.size) {
+      const actual = createHash("sha256").update(readFileSync(transfer.localPath)).digest("hex");
+      if (actual !== transfer.sha256) throw new Error("TRANSFER_HASH_MISMATCH");
+      const readyPath = join(this.transferDirectory, input.id);
+      renameSync(transfer.localPath, readyPath);
+      this.db.prepare("UPDATE transfers SET state='ready',local_path=?,updated_at=? WHERE id=?").run(readyPath, now, input.id);
+    }
+    return this.getTransfer(input.id, true)!;
+  }
+
+  getTransfer(id: string, includeUploading = false, now = Date.now()): StoredTransfer | undefined {
+    const row = this.db.prepare("SELECT * FROM transfers WHERE id=?").get(id) as Record<string, unknown> | undefined;
+    if (!row || Number(row.expires_at) <= now || (!includeUploading && row.state !== "ready")) return undefined;
+    const transfer: StoredTransfer = {
+      id: String(row.id), workerId: String(row.worker_id), fileName: String(row.file_name), mimeType: String(row.mime_type),
+      size: Number(row.size), sha256: String(row.sha256), expiresAt: Number(row.expires_at),
+      receivedBytes: Number(row.received_bytes), state: String(row.state) as StoredTransfer["state"], localPath: String(row.local_path)
+    };
+    if (!existsSync(transfer.localPath) || statSync(transfer.localPath).size !== transfer.receivedBytes) throw new Error("TRANSFER_STORAGE_MISMATCH");
+    return transfer;
+  }
+
+  readTransfer(id: string, now = Date.now()): { transfer: StoredTransfer; bytes: Buffer } | undefined {
+    const transfer = this.getTransfer(id, false, now);
+    return transfer ? { transfer, bytes: readFileSync(transfer.localPath) } : undefined;
+  }
+
+  sweepTransfers(now = Date.now()): void {
+    const rows = this.db.prepare("SELECT id,local_path FROM transfers WHERE expires_at<=?").all(now) as Array<{ id: string; local_path: string }>;
+    for (const row of rows) rmSync(row.local_path, { force: true });
+    this.db.prepare("DELETE FROM transfers WHERE expires_at<=?").run(now);
   }
 }

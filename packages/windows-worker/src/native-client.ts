@@ -17,6 +17,8 @@ export class NativeClient {
     const configured = this.runtime.config.paths.nativeHelper;
     const candidates = [
       configured,
+      path.resolve("packages", "windows-worker", "native", "ChatGptMachine.Native", "bin", "Release", "net10.0-windows", "win-x64", "publish", "ChatGptMachine.Native.exe"),
+      path.resolve("packages", "windows-worker", "native", "ChatGptMachine.Native", "bin", "Release", "net10.0-windows", "ChatGptMachine.Native.dll"),
       path.resolve("native", "ChatGptMachine.Native", "bin", "Release", "net10.0-windows", "win-x64", "publish", "ChatGptMachine.Native.exe"),
       path.resolve("native", "ChatGptMachine.Native", "bin", "Release", "net10.0-windows", "ChatGptMachine.Native.dll"),
       path.resolve("native", "ChatGptMachine.Native", "bin", "Release", "net10.0-windows", "ChatGptMachine.Native.exe"),

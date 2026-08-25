@@ -6,6 +6,7 @@ import { Runtime } from "./runtime.js";
 import { createServer } from "./server.js";
 import { ProcessManager } from "./process-tools.js";
 import { startAdminServer } from "./admin.js";
+import { NativeClient } from "./native-client.js";
 
 export class ApprovalNeeded extends Error {
   constructor(readonly summary: string) { super(summary); this.name = "ApprovalNeeded"; }
@@ -44,16 +45,17 @@ export class WindowsToolExecutor {
     return new WindowsToolExecutor(paths, runtime, client, options.startAdmin ?? true);
   }
 
-  async execute(toolName: string, args: Record<string, unknown>, approvedSummary?: string): Promise<unknown> {
+  async execute(toolName: string, args: Record<string, unknown>, approvedSummary?: string, correlationId?: string): Promise<unknown> {
     let requestedSummary: string | undefined;
     this.runtime.approvalHandler = async (summary) => {
       if (approvedSummary !== undefined && approvedSummary === summary) return "approved";
       requestedSummary = summary;
       return "pending";
     };
+    this.runtime.correlationId = correlationId;
     let result: CallToolResult;
     try { result = await this.client.callTool({ name: toolName, arguments: args }) as CallToolResult; }
-    finally { this.runtime.approvalHandler = undefined; }
+    finally { this.runtime.approvalHandler = undefined; this.runtime.correlationId = undefined; }
     if (requestedSummary !== undefined) throw new ApprovalNeeded(requestedSummary);
     const parsed = parseToolResult(result);
     if (!parsed || parsed.ok !== true) {
@@ -67,6 +69,19 @@ export class WindowsToolExecutor {
     await this.admin?.close();
     await this.client.close();
     this.runtime.audit.close();
+  }
+
+  async readWorkerCredential(): Promise<string> {
+    const result = await new NativeClient(this.runtime).call<{ secret: string }>("credential.read", {});
+    return result.secret;
+  }
+
+  async storeWorkerCredential(secret: string): Promise<void> {
+    await new NativeClient(this.runtime).call("credential.store", { secret });
+  }
+
+  getExport(id: string) {
+    return this.runtime.audit.getTransfer(id);
   }
 }
 
